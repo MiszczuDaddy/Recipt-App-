@@ -1,0 +1,13 @@
+rules_version = '2';
+
+// Open-access rules for the Receipt Scanner app (no login/auth by design).
+// Anyone with the site URL can read/write files under "receipts/".
+// Paste this into Firebase Console -> Storage -> Rules,
+// or deploy with `firebase deploy --only storage` if you use the CLI.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /receipts/{allPaths=**} {
+      allow read, write: if true;
+    }
+  }
+}

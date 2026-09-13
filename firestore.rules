@@ -1,0 +1,13 @@
+rules_version = '2';
+
+// Open-access rules for the Receipt Scanner app (no login/auth by design).
+// Anyone with the site URL can read/write the "receipts" collection.
+// Paste this into Firebase Console -> Firestore Database -> Rules,
+// or deploy with `firebase deploy --only firestore:rules` if you use the CLI.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /receipts/{receiptId} {
+      allow read, write: if true;
+    }
+  }
+}
