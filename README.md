@@ -129,12 +129,18 @@ reach Firebase).
 
 ## How it works
 
-- **Scan**: tapping "Scan Receipts" opens the phone's normal file picker
-  (`<input type="file" accept="image/*" multiple>`, no `capture` attribute)
-  — camera, gallery, and (on phones that support it, e.g. most Samsung/
-  Android devices) a built-in "Scan documents" option all show up there.
-  Each photo is downscaled and re-encoded as JPEG client-side, then added to
-  a review batch — nothing is uploaded yet.
+- **Scan**: two buttons cover two different `<input type="file">` behaviors,
+  since a phone can't reliably get both from one input:
+  - **"Take Photo"** uses `capture="environment"`, which forces the rear
+    camera open directly. Reliable on every phone, but it bypasses the OS
+    file chooser entirely.
+  - **"Choose File"** has no `capture` attribute, so it opens the normal OS
+    file/photo chooser instead — camera, gallery, and (on phones that
+    support it, e.g. most Samsung/Android devices) a built-in "Scan
+    documents" option all show up there as choices.
+
+  Either way, each photo is downscaled and re-encoded as JPEG client-side,
+  then added to a review batch — nothing is uploaded yet.
 - **Review**: the batch screen shows a thumbnail grid with a ✕ on each photo
   so you can drop blurry or duplicate shots before anything is saved
   ("finalized").

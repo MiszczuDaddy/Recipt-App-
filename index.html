@@ -141,6 +141,19 @@
     font-size:16px;
     border-radius:14px;
   }
+  .scan-actions{
+    display:flex;
+    gap:10px;
+    width:100%;
+    max-width:528px;
+  }
+  .scan-actions .btn{
+    flex:1;
+    max-width:none;
+    padding:14px 10px;
+    font-size:14.5px;
+    border-radius:14px;
+  }
 
   .empty{
     text-align:center;
@@ -227,9 +240,11 @@
     border-top:1px solid var(--border);
     padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)) 16px;
     display:flex;
-    gap:10px;
+    flex-direction:column;
+    gap:8px;
   }
-  .bottom-bar .btn{flex:1;}
+  .bottom-bar .row{display:flex; gap:10px;}
+  .bottom-bar .row .btn{flex:1;}
 
   .spinner{
     width:16px; height:16px;
@@ -312,7 +327,13 @@
 <div id="toast"></div>
 <div id="lightbox"><button class="close" id="lightboxClose">&#10005;</button><img id="lightboxImg" alt="Receipt full size"></div>
 
-<input type="file" id="cameraInput" accept="image/*" multiple style="display:none">
+<!-- capture="environment" forces the rear camera open directly - reliable everywhere,
+     but on phones with a document-scan feature (e.g. Samsung) it bypasses the chooser
+     that feature lives in, so we offer both this and a plain picker below. -->
+<input type="file" id="takePhotoInput" accept="image/*" capture="environment" multiple style="display:none">
+<!-- No capture attribute: opens the normal OS file/photo chooser, where "Scan documents"
+     (Samsung and some other Android phones) shows up as one of the options. -->
+<input type="file" id="chooseFileInput" accept="image/*" multiple style="display:none">
 
 <!-- Firebase (compat build - simplest to use from a single static HTML file, no bundler) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -442,12 +463,22 @@
   }
 
   // ---------------------------------------------------------------------
-  // Camera input handling
+  // Photo input handling
+  //
+  // Two separate <input type="file"> elements, deliberately not merged into
+  // one: capture="environment" forces the rear camera open directly with no
+  // regressions, but it also skips right past the OS file chooser - which
+  // on Samsung (and some other Android) phones is where the built-in "Scan
+  // documents" option lives. So "Take Photo" keeps capture for a guaranteed
+  // working camera shortcut, and "Choose File" omits it to surface the full
+  // chooser (gallery + scan-documents + camera) instead.
   // ---------------------------------------------------------------------
-  var cameraInput = $("#cameraInput");
-  cameraInput.addEventListener("change", function(){
-    var files = Array.prototype.slice.call(cameraInput.files || []);
-    cameraInput.value = ""; // allow re-selecting the same photo later
+  var takePhotoInput = $("#takePhotoInput");
+  var chooseFileInput = $("#chooseFileInput");
+
+  function handleFilesPicked(input){
+    var files = Array.prototype.slice.call(input.files || []);
+    input.value = ""; // allow re-selecting the same photo later
     if (!files.length) return;
     Promise.all(files.map(function(file){
       return processImage(file).then(function(res){
@@ -467,11 +498,17 @@
       location.hash = "#/review";
       render();
     });
-  });
+  }
+  takePhotoInput.addEventListener("change", function(){ handleFilesPicked(takePhotoInput); });
+  chooseFileInput.addEventListener("change", function(){ handleFilesPicked(chooseFileInput); });
 
-  function launchCamera(){
+  function openTakePhoto(){
     if (!CONFIGURED) { showToast("Set up Firebase first — see README.md"); return; }
-    cameraInput.click();
+    takePhotoInput.click();
+  }
+  function openChooseFile(){
+    if (!CONFIGURED) { showToast("Set up Firebase first — see README.md"); return; }
+    chooseFileInput.click();
   }
 
   function removeFromBatch(id){
@@ -668,7 +705,10 @@
     main.appendChild(listWrap);
 
     root.appendChild(el("div", { class: "fab-wrap" }, [
-      el("button", { class: "btn btn-primary btn-block", onclick: launchCamera }, ["📷  Scan Receipts"])
+      el("div", { class: "scan-actions" }, [
+        el("button", { class: "btn btn-primary", onclick: openTakePhoto }, ["📷 Take Photo"]),
+        el("button", { class: "btn btn-primary", onclick: openChooseFile }, ["🖼️ Choose File"])
+      ])
     ]));
 
     if (!CONFIGURED) return;
@@ -678,7 +718,7 @@
       if (!months.length) {
         listWrap.appendChild(el("div", { class: "empty" }, [
           el("span", { class: "big" }, ["🧾"]),
-          "No receipts yet. Tap “Scan Receipts” to add your first one."
+          "No receipts yet. Tap “Take Photo” or “Choose File” to add your first one."
         ]));
         return;
       }
@@ -727,15 +767,20 @@
     main.appendChild(grid);
 
     root.appendChild(el("div", { class: "bottom-bar" }, [
-      el("button", { class: "btn btn-outline", disabled: state.saving, onclick: discardBatch }, ["Discard"]),
-      el("button", { class: "btn btn-outline", disabled: state.saving, onclick: launchCamera }, ["+ Add More"]),
-      el("button", {
-        class: "btn btn-primary",
-        disabled: state.saving,
-        onclick: saveBatch
-      }, state.saving
-          ? [el("span", { class: "spinner" }), " Saving…"]
-          : ["Save (" + state.pendingBatch.length + ")"])
+      el("div", { class: "row" }, [
+        el("button", { class: "btn btn-outline btn-sm", disabled: state.saving, onclick: openTakePhoto }, ["📷 Take Photo"]),
+        el("button", { class: "btn btn-outline btn-sm", disabled: state.saving, onclick: openChooseFile }, ["🖼️ Choose File"])
+      ]),
+      el("div", { class: "row" }, [
+        el("button", { class: "btn btn-outline", disabled: state.saving, onclick: discardBatch }, ["Discard"]),
+        el("button", {
+          class: "btn btn-primary",
+          disabled: state.saving,
+          onclick: saveBatch
+        }, state.saving
+            ? [el("span", { class: "spinner" }), " Saving…"]
+            : ["Save (" + state.pendingBatch.length + ")"])
+      ])
     ]));
   }
 
