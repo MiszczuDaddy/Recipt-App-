@@ -11,10 +11,10 @@
 // and storage.rules), not by keeping this file secret.
 // ---------------------------------------------------------------------------
 window.RECEIPT_APP_FIREBASE_CONFIG = {
-  apiKey: "REPLACE_WITH_YOUR_API_KEY",
-  authDomain: "REPLACE_WITH_YOUR_PROJECT.firebaseapp.com",
-  projectId: "REPLACE_WITH_YOUR_PROJECT_ID",
-  storageBucket: "REPLACE_WITH_YOUR_PROJECT.appspot.com",
-  messagingSenderId: "REPLACE_WITH_YOUR_SENDER_ID",
-  appId: "REPLACE_WITH_YOUR_APP_ID"
+  apiKey: "AIzaSyDilcwsdJHt0jfye8wqtEIahQMdECdKg4E",
+  authDomain: "recipts-app.firebaseapp.com",
+  projectId: "recipts-app",
+  storageBucket: "recipts-app.firebasestorage.app",
+  messagingSenderId: "493144127593",
+  appId: "1:493144127593:web:a9eda578ed7443400bcaf8"
 };
