@@ -129,10 +129,12 @@ reach Firebase).
 
 ## How it works
 
-- **Scan**: tapping "Scan Receipts" opens your camera (`<input type="file"
-  capture="environment" multiple>`). Each photo is downscaled and re-encoded
-  as JPEG client-side, then added to a review batch — nothing is uploaded
-  yet.
+- **Scan**: tapping "Scan Receipts" opens the phone's normal file picker
+  (`<input type="file" accept="image/*" multiple>`, no `capture` attribute)
+  — camera, gallery, and (on phones that support it, e.g. most Samsung/
+  Android devices) a built-in "Scan documents" option all show up there.
+  Each photo is downscaled and re-encoded as JPEG client-side, then added to
+  a review batch — nothing is uploaded yet.
 - **Review**: the batch screen shows a thumbnail grid with a ✕ on each photo
   so you can drop blurry or duplicate shots before anything is saved
   ("finalized").
@@ -157,5 +159,5 @@ No build step — just serve the folder statically, e.g.:
 npx serve .
 ```
 
-Camera capture (`capture="environment"`) generally requires HTTPS or
-`localhost`, so use `localhost` while testing locally.
+Camera access from the file picker generally requires HTTPS or `localhost`,
+so use `localhost` while testing locally.
