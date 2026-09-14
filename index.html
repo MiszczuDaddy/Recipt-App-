@@ -629,6 +629,7 @@
   }
 
   function showNextCropItem(){
+    setCropBusy(false);
     if (!state.cropQueue.length){
       cropOverlay.classList.remove("show");
       state.cropCurrent = null;
@@ -721,28 +722,44 @@
     showNextCropItem();
   });
 
-  $("#cropConfirmBtn").addEventListener("click", function(){
+  var cropConfirmBtn = $("#cropConfirmBtn");
+  var cropConfirmBtnDefaultHtml = cropConfirmBtn.innerHTML;
+
+  function setCropBusy(busy){
+    cropConfirmBtn.disabled = busy;
+    cropConfirmBtn.innerHTML = busy ? '<span class="spinner"></span> Processing…' : cropConfirmBtnDefaultHtml;
+    $("#cropResetBtn").disabled = busy;
+    $("#cropCancelBtn").disabled = busy;
+  }
+
+  cropConfirmBtn.addEventListener("click", function(){
     var item = state.cropCurrent;
-    if (!item) return;
-    var srcPts = state.cropPoints.map(function(p){
-      return { x: p.x * item.width, y: p.y * item.height };
-    });
-    var result = warpQuadToCanvas(item.canvas, srcPts);
-    canvasToBlob(result.canvas, "image/jpeg", 0.85).then(function(blob){
-      state.pendingBatch.push({
-        id: item.id,
-        blob: blob,
-        previewUrl: URL.createObjectURL(blob),
-        capturedAt: item.capturedAt,
-        width: result.width,
-        height: result.height
+    if (!item || cropConfirmBtn.disabled) return;
+    setCropBusy(true);
+    // Defer the actual (synchronous, CPU-bound) warp to the next tick so the
+    // browser gets a chance to paint the "Processing…" state first.
+    setTimeout(function(){
+      var srcPts = state.cropPoints.map(function(p){
+        return { x: p.x * item.width, y: p.y * item.height };
       });
-      state.cropQueue.shift();
-      showNextCropItem();
-    }).catch(function(err){
-      console.error(err);
-      showToast("Couldn't process that crop — try again.");
-    });
+      var result = warpQuadToCanvas(item.canvas, srcPts);
+      canvasToBlob(result.canvas, "image/jpeg", 0.85).then(function(blob){
+        state.pendingBatch.push({
+          id: item.id,
+          blob: blob,
+          previewUrl: URL.createObjectURL(blob),
+          capturedAt: item.capturedAt,
+          width: result.width,
+          height: result.height
+        });
+        state.cropQueue.shift();
+        showNextCropItem(); // resets the busy state for the next item (or hides the overlay)
+      }).catch(function(err){
+        console.error(err);
+        showToast("Couldn't process that crop — try again.");
+        setCropBusy(false);
+      });
+    }, 20);
   });
 
   function distance(p, q){ var dx = p.x - q.x, dy = p.y - q.y; return Math.sqrt(dx * dx + dy * dy); }
@@ -779,39 +796,19 @@
     };
   }
 
-  // Draws the triangle of `img` at source points srcPts onto `ctx` at
-  // destination points dstPts, via the unique affine transform mapping one
-  // triangle onto the other (solved with Cramer's rule) plus a clip path.
-  function warpTriangle(ctx, img, srcPts, dstPts){
-    var x0 = srcPts[0].x, y0 = srcPts[0].y, x1 = srcPts[1].x, y1 = srcPts[1].y, x2 = srcPts[2].x, y2 = srcPts[2].y;
-    var X0 = dstPts[0].x, Y0 = dstPts[0].y, X1 = dstPts[1].x, Y1 = dstPts[1].y, X2 = dstPts[2].x, Y2 = dstPts[2].y;
-
-    var denom = x0 * (y1 - y2) + x1 * (y2 - y0) + x2 * (y0 - y1);
-    if (Math.abs(denom) < 1e-6) return;
-
-    var a = (X0 * (y1 - y2) + X1 * (y2 - y0) + X2 * (y0 - y1)) / denom;
-    var b = (Y0 * (y1 - y2) + Y1 * (y2 - y0) + Y2 * (y0 - y1)) / denom;
-    var c = (X0 * (x2 - x1) + X1 * (x0 - x2) + X2 * (x1 - x0)) / denom;
-    var d = (Y0 * (x2 - x1) + Y1 * (x0 - x2) + Y2 * (x1 - x0)) / denom;
-    var e = (X0 * (x1 * y2 - x2 * y1) + X1 * (x2 * y0 - x0 * y2) + X2 * (x0 * y1 - x1 * y0)) / denom;
-    var f = (Y0 * (x1 * y2 - x2 * y1) + Y1 * (x2 * y0 - x0 * y2) + Y2 * (x0 * y1 - x1 * y0)) / denom;
-
-    var sMinX = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
-    var sMinY = Math.max(0, Math.floor(Math.min(y0, y1, y2)));
-    var sMaxX = Math.min(img.width, Math.ceil(Math.max(x0, x1, x2)));
-    var sMaxY = Math.min(img.height, Math.ceil(Math.max(y0, y1, y2)));
-    var sw = sMaxX - sMinX, sh = sMaxY - sMinY;
-    if (sw <= 0 || sh <= 0) return;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(X0, Y0); ctx.lineTo(X1, Y1); ctx.lineTo(X2, Y2); ctx.closePath();
-    ctx.clip();
-    ctx.transform(a, b, c, d, e, f);
-    ctx.drawImage(img, sMinX, sMinY, sw, sh, sMinX, sMinY, sw, sh);
-    ctx.restore();
-  }
-
+  // Straightens the quad by direct per-pixel inverse sampling, rather than
+  // approximating the warp as a mesh of small triangles. An earlier version
+  // used a triangle mesh (each cell rendered via Canvas2D's affine
+  // transform()), but adjacent triangles use genuinely different affine
+  // maps that only agree exactly along their shared edge - on fine detail
+  // (small print, ruled lines) that mismatch is visible as a faint grid
+  // baked right into the saved image, and padding the triangles out to hide
+  // the seam only pushed the artifact around rather than removing it. This
+  // version has no mesh and no triangles to seam: for every output pixel it
+  // asks the true projective map "where did this come from in the source
+  // photo" and bilinearly samples that exact point, so there is nothing to
+  // mismatch and no way for a grid pattern to appear.
+  //
   // srcPts: [TL, TR, BR, BL] in sourceCanvas pixel coordinates.
   function warpQuadToCanvas(sourceCanvas, srcPts){
     var TL = srcPts[0], TR = srcPts[1], BR = srcPts[2], BL = srcPts[3];
@@ -825,36 +822,52 @@
     outW = Math.round(outW * scale);
     outH = Math.round(outH * scale);
 
+    var srcW = sourceCanvas.width, srcH = sourceCanvas.height;
+    var srcData = sourceCanvas.getContext("2d").getImageData(0, 0, srcW, srcH).data;
+
     var out = document.createElement("canvas");
     out.width = outW; out.height = outH;
-    var ctx = out.getContext("2d");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, outW, outH);
+    var outCtx = out.getContext("2d");
+    var outImage = outCtx.createImageData(outW, outH);
+    var outData = outImage.data;
 
-    var cols = Math.max(6, Math.min(24, Math.round(outW / 70)));
-    var rows = Math.max(6, Math.min(30, Math.round(outH / 70)));
     var mapFn = squareToQuadMapper([TL, TR, BR, BL]);
+    var maxSrcX = srcW - 1, maxSrcY = srcH - 1;
 
-    for (var j = 0; j < rows; j++){
-      var v0 = j / rows, v1 = (j + 1) / rows;
-      for (var i = 0; i < cols; i++){
-        var u0 = i / cols, u1 = (i + 1) / cols;
+    for (var y = 0; y < outH; y++){
+      var v = (y + 0.5) / outH;
+      var rowOffset = y * outW * 4;
+      for (var x = 0; x < outW; x++){
+        var u = (x + 0.5) / outW;
+        var sp = mapFn(u, v);
+        var oi = rowOffset + x * 4;
 
-        var sTL = mapFn(u0, v0);
-        var sTR = mapFn(u1, v0);
-        var sBR = mapFn(u1, v1);
-        var sBL = mapFn(u0, v1);
+        if (sp.x < 0 || sp.y < 0 || sp.x > maxSrcX || sp.y > maxSrcY) {
+          // Outside the source photo entirely (can happen right at the
+          // quad's edge from floating-point rounding) - fall back to white
+          // rather than sampling garbage.
+          outData[oi] = 255; outData[oi + 1] = 255; outData[oi + 2] = 255; outData[oi + 3] = 255;
+          continue;
+        }
 
-        var dTL = { x: u0 * outW, y: v0 * outH };
-        var dTR = { x: u1 * outW, y: v0 * outH };
-        var dBR = { x: u1 * outW, y: v1 * outH };
-        var dBL = { x: u0 * outW, y: v1 * outH };
+        // Bilinear sample of the 4 nearest source pixels around (sp.x, sp.y).
+        var x0 = sp.x | 0, y0 = sp.y | 0;
+        var x1 = x0 < maxSrcX ? x0 + 1 : x0;
+        var y1 = y0 < maxSrcY ? y0 + 1 : y0;
+        var fx = sp.x - x0, fy = sp.y - y0;
 
-        warpTriangle(ctx, sourceCanvas, [sTL, sTR, sBR], [dTL, dTR, dBR]);
-        warpTriangle(ctx, sourceCanvas, [sTL, sBR, sBL], [dTL, dBR, dBL]);
+        var i00 = (y0 * srcW + x0) * 4, i10 = (y0 * srcW + x1) * 4;
+        var i01 = (y1 * srcW + x0) * 4, i11 = (y1 * srcW + x1) * 4;
+
+        for (var c = 0; c < 4; c++){
+          var top = srcData[i00 + c] + (srcData[i10 + c] - srcData[i00 + c]) * fx;
+          var bottom = srcData[i01 + c] + (srcData[i11 + c] - srcData[i01 + c]) * fx;
+          outData[oi + c] = top + (bottom - top) * fy;
+        }
       }
     }
 
+    outCtx.putImageData(outImage, 0, 0);
     return { canvas: out, width: outW, height: outH };
   }
 

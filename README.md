@@ -140,15 +140,18 @@ reach Firebase).
   receipt is handled in-app instead — see **Crop** below.
 - **Crop**: after each photo, a full-screen crop tool shows it with 4
   draggable corner handles (order: top-left, top-right, bottom-right,
-  bottom-left). Drag them onto the receipt's actual edges, then tap "Use
-  Photo". The selected quad is perspective-corrected into a straightened
-  rectangle entirely client-side — a mesh of small quads, each rendered as
-  two textured triangles via Canvas2D's affine `transform()`, with the
-  quad-to-rectangle placement computed via a proper projective (homography)
-  transform so straight edges stay straight. No WebGL, no external library;
-  works the same on iOS Safari and Android Chrome. Taking several photos in
-  a row queues them through this screen one at a time ("Photo 2 of 3", etc).
-  The result is downscaled and re-encoded as JPEG, then added to a review
+  bottom-left) — a separate UI layer (SVG outline + handle elements) drawn
+  *over* the photo, never touching its pixels. Drag them onto the receipt's
+  actual edges, then tap "Use Photo". The selected quad is
+  perspective-corrected into a straightened rectangle entirely client-side,
+  by computing a proper projective (homography) transform from the 4 chosen
+  corners and then, for every pixel of the output, sampling the exact
+  corresponding point in the source photo (bilinear-interpolated) - a direct
+  per-pixel inverse mapping, not an approximated mesh, so there's nothing
+  that can leave visible seams in the saved image. No WebGL, no external
+  library; works the same on iOS Safari and Android Chrome. Taking several
+  photos in a row queues them through this screen one at a time ("Photo 2 of
+  3", etc). The result is downscaled and re-encoded as JPEG, then added to a review
   batch — nothing is uploaded yet.
 - **Review**: the batch screen shows a thumbnail grid with a ✕ on each
   cropped photo so you can drop any you don't want before anything is saved
