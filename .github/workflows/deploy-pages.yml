@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, claude/receipt-scanner-pwa-z6bah0]
   workflow_dispatch:
 
 permissions:
