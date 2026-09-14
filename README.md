@@ -4,6 +4,7 @@ A single-page, installable web app for scanning physical receipts with your
 phone camera. No login, no accounts — open a link and start scanning.
 
 - 📷 Camera capture (multiple photos in a row)
+- ✂️ Crop/deskew each photo with 4 draggable corner handles, right after taking it
 - 🗓️ Auto-grouped by month/year based on scan date
 - 🔍 Review screen — delete bad shots before anything is saved
 - 📄 One-tap "Download PDF" per month (all that month's receipts compiled into a single PDF)
@@ -129,21 +130,30 @@ reach Firebase).
 
 ## How it works
 
-- **Scan**: two buttons cover two different `<input type="file">` behaviors,
-  since a phone can't reliably get both from one input:
-  - **"Take Photo"** uses `capture="environment"`, which forces the rear
-    camera open directly. Reliable on every phone, but it bypasses the OS
-    file chooser entirely.
-  - **"Choose File"** has no `capture` attribute, so it opens the normal OS
-    file/photo chooser instead — camera, gallery, and (on phones that
-    support it, e.g. most Samsung/Android devices) a built-in "Scan
-    documents" option all show up there as choices.
-
-  Either way, each photo is downscaled and re-encoded as JPEG client-side,
-  then added to a review batch — nothing is uploaded yet.
-- **Review**: the batch screen shows a thumbnail grid with a ✕ on each photo
-  so you can drop blurry or duplicate shots before anything is saved
-  ("finalized").
+- **Scan**: one button, `<input type="file" capture="environment">`, forces
+  the rear camera open directly. This is the only input behavior that's
+  proven reliable across phones — a plain `<input>` with no `capture`
+  attribute (tried in an earlier version, to try to reach Samsung's
+  built-in "Scan documents" option through the OS chooser) was found on
+  Samsung to sometimes open the *front* camera instead. Since no OS-level
+  document scanner can be reached reliably this way, cropping/deskewing the
+  receipt is handled in-app instead — see **Crop** below.
+- **Crop**: after each photo, a full-screen crop tool shows it with 4
+  draggable corner handles (order: top-left, top-right, bottom-right,
+  bottom-left). Drag them onto the receipt's actual edges, then tap "Use
+  Photo". The selected quad is perspective-corrected into a straightened
+  rectangle entirely client-side — a mesh of small quads, each rendered as
+  two textured triangles via Canvas2D's affine `transform()`, with the
+  quad-to-rectangle placement computed via a proper projective (homography)
+  transform so straight edges stay straight. No WebGL, no external library;
+  works the same on iOS Safari and Android Chrome. Taking several photos in
+  a row queues them through this screen one at a time ("Photo 2 of 3", etc).
+  The result is downscaled and re-encoded as JPEG, then added to a review
+  batch — nothing is uploaded yet.
+- **Review**: the batch screen shows a thumbnail grid with a ✕ on each
+  cropped photo so you can drop any you don't want before anything is saved
+  ("finalized"). "+ Add Photo" re-opens the camera (and crop screen) to add
+  more to the same batch.
 - **Save**: tapping Save uploads each remaining photo to Firebase Storage
   under `receipts/<YYYY-MM>/<id>.jpg` and writes a matching Firestore
   document (`receipts` collection) with the month key, scan date, and image
@@ -165,5 +175,5 @@ No build step — just serve the folder statically, e.g.:
 npx serve .
 ```
 
-Camera access from the file picker generally requires HTTPS or `localhost`,
-so use `localhost` while testing locally.
+Camera access via `capture="environment"` generally requires HTTPS or
+`localhost`, so use `localhost` while testing locally.

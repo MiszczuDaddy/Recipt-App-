@@ -141,19 +141,6 @@
     font-size:16px;
     border-radius:14px;
   }
-  .scan-actions{
-    display:flex;
-    gap:10px;
-    width:100%;
-    max-width:528px;
-  }
-  .scan-actions .btn{
-    flex:1;
-    max-width:none;
-    padding:14px 10px;
-    font-size:14.5px;
-    border-radius:14px;
-  }
 
   .empty{
     text-align:center;
@@ -240,11 +227,9 @@
     border-top:1px solid var(--border);
     padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)) 16px;
     display:flex;
-    flex-direction:column;
-    gap:8px;
+    gap:10px;
   }
-  .bottom-bar .row{display:flex; gap:10px;}
-  .bottom-bar .row .btn{flex:1;}
+  .bottom-bar .btn{flex:1;}
 
   .spinner{
     width:16px; height:16px;
@@ -319,6 +304,83 @@
   }
 
   .hint{color:var(--muted); font-size:13px; margin:0 0 16px; line-height:1.5;}
+
+  #cropOverlay{
+    position:fixed;
+    inset:0;
+    background:#0b0f0d;
+    display:none;
+    flex-direction:column;
+    z-index:70;
+  }
+  #cropOverlay.show{display:flex;}
+  .crop-header{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:calc(14px + env(safe-area-inset-top,0px)) 16px 14px 16px;
+    color:#fff;
+    flex-shrink:0;
+  }
+  .crop-header .title{flex:1; font-weight:700; font-size:16px;}
+  .crop-header .title .sub{display:block; font-size:12px; font-weight:400; opacity:.75; margin-top:1px;}
+  .crop-stage{
+    position:relative;
+    flex:1;
+    min-height:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    overflow:hidden;
+    touch-action:none;
+  }
+  .crop-canvas{
+    max-width:100%;
+    max-height:100%;
+    display:block;
+    touch-action:none;
+    -webkit-user-select:none;
+    user-select:none;
+  }
+  .crop-svg{
+    position:absolute;
+    left:0; top:0;
+    pointer-events:none;
+  }
+  .crop-poly{
+    fill:rgba(21,101,82,.28);
+    stroke:#fff;
+    stroke-width:2;
+  }
+  .crop-handle{
+    position:absolute;
+    left:0; top:0;
+    width:34px; height:34px;
+    margin-left:-17px;
+    margin-top:-17px;
+    border-radius:50%;
+    background:rgba(255,255,255,.96);
+    border:3px solid var(--primary);
+    box-shadow:0 2px 8px rgba(0,0,0,.45);
+    touch-action:none;
+    cursor:grab;
+    z-index:2;
+  }
+  .crop-actions{
+    display:flex;
+    gap:10px;
+    padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px)) 16px;
+    background:#12211c;
+    flex-shrink:0;
+  }
+  .crop-actions .btn{flex:1;}
+  .crop-hint{
+    color:rgba(255,255,255,.7);
+    font-size:12.5px;
+    text-align:center;
+    padding:0 16px 10px;
+    flex-shrink:0;
+  }
 </style>
 </head>
 <body>
@@ -327,13 +389,34 @@
 <div id="toast"></div>
 <div id="lightbox"><button class="close" id="lightboxClose">&#10005;</button><img id="lightboxImg" alt="Receipt full size"></div>
 
-<!-- capture="environment" forces the rear camera open directly - reliable everywhere,
-     but on phones with a document-scan feature (e.g. Samsung) it bypasses the chooser
-     that feature lives in, so we offer both this and a plain picker below. -->
+<!-- capture="environment" forces the rear camera open directly on every phone we've
+     tested, including Samsung (where a plain <input> with no capture attribute was
+     found to sometimes open the FRONT camera instead of a chooser). Since we can't
+     reach any OS-level document scanner reliably this way, cropping/deskewing the
+     receipt is done ourselves after the photo is taken - see the crop screen below. -->
 <input type="file" id="takePhotoInput" accept="image/*" capture="environment" multiple style="display:none">
-<!-- No capture attribute: opens the normal OS file/photo chooser, where "Scan documents"
-     (Samsung and some other Android phones) shows up as one of the options. -->
-<input type="file" id="chooseFileInput" accept="image/*" multiple style="display:none">
+
+<!-- Crop screen: shown after each photo is taken, before it's added to the review
+     batch. Lets the user drag the 4 corner handles onto the receipt's edges; the
+     quad is then perspective-warped into a straightened rectangle client-side. -->
+<div id="cropOverlay">
+  <div class="crop-header">
+    <button class="icon-btn" id="cropCancelBtn" aria-label="Discard this photo">&#10005;</button>
+    <div class="title">Crop Receipt<span class="sub" id="cropSub"></span></div>
+  </div>
+  <div class="crop-stage" id="cropStage">
+    <svg class="crop-svg" id="cropSvg"><polygon class="crop-poly" id="cropPoly"></polygon></svg>
+    <div class="crop-handle" id="cropHandle0"></div>
+    <div class="crop-handle" id="cropHandle1"></div>
+    <div class="crop-handle" id="cropHandle2"></div>
+    <div class="crop-handle" id="cropHandle3"></div>
+  </div>
+  <div class="crop-hint">Drag the corners onto the edges of the receipt</div>
+  <div class="crop-actions">
+    <button class="btn btn-outline" id="cropResetBtn">Reset</button>
+    <button class="btn btn-primary" id="cropConfirmBtn">Use Photo</button>
+  </div>
+</div>
 
 <!-- Firebase (compat build - simplest to use from a single static HTML file, no bundler) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -371,7 +454,11 @@
   var state = {
     pendingBatch: [],   // [{id, blob, previewUrl, capturedAt, width, height}]
     monthsCache: null,  // [{monthKey, label, count}]
-    saving: false
+    saving: false,
+    cropQueue: [],       // photos captured but not yet cropped/confirmed: [{id, canvas, width, height, capturedAt}]
+    cropTotal: 0,        // size of the batch cropQueue started with, for the "Photo X of N" label
+    cropCurrent: null,   // the cropQueue[0] item currently shown on the crop screen
+    cropPoints: null     // current handle positions, normalized [0,1] x [0,1]: [TL, TR, BR, BL]
   };
 
   // ---------------------------------------------------------------------
@@ -441,7 +528,10 @@
     });
   }
 
-  function processImage(file){
+  // Downscales to a canvas only - deliberately does NOT encode to JPEG yet, since
+  // the crop screen needs real pixels to warp. Encoding happens once, after crop,
+  // in canvasToBlob().
+  function loadDownscaledCanvas(file){
     return loadImageSource(file).then(function(src){
       var maxDim = 1800;
       var width = src.width, height = src.height;
@@ -453,62 +543,319 @@
       var ctx = canvas.getContext("2d");
       ctx.drawImage(src, 0, 0, w, h);
       if (src.close) src.close();
-      return new Promise(function(resolve, reject){
-        canvas.toBlob(function(blob){
-          if (!blob) return reject(new Error("Could not encode image"));
-          resolve({ blob: blob, width: w, height: h });
-        }, "image/jpeg", 0.85);
-      });
+      return { canvas: canvas, width: w, height: h };
+    });
+  }
+
+  function canvasToBlob(canvas, type, quality){
+    return new Promise(function(resolve, reject){
+      canvas.toBlob(function(blob){
+        if (!blob) return reject(new Error("Could not encode image"));
+        resolve(blob);
+      }, type, quality);
     });
   }
 
   // ---------------------------------------------------------------------
   // Photo input handling
   //
-  // Two separate <input type="file"> elements, deliberately not merged into
-  // one: capture="environment" forces the rear camera open directly with no
-  // regressions, but it also skips right past the OS file chooser - which
-  // on Samsung (and some other Android) phones is where the built-in "Scan
-  // documents" option lives. So "Take Photo" keeps capture for a guaranteed
-  // working camera shortcut, and "Choose File" omits it to surface the full
-  // chooser (gallery + scan-documents + camera) instead.
+  // Single <input capture="environment">: forces the rear camera open
+  // directly on every phone we've tested, with no regressions. A plain
+  // <input> with no capture attribute was tried instead (to reach Samsung's
+  // built-in "Scan documents" option through the OS chooser) but on Samsung
+  // it sometimes opened the FRONT camera instead - worse than what we had.
+  // Since no OS-level document scanner can be reached reliably this way,
+  // cropping/deskewing the receipt is handled ourselves, in-app, right
+  // after the photo is taken (see the crop-screen section below).
   // ---------------------------------------------------------------------
   var takePhotoInput = $("#takePhotoInput");
-  var chooseFileInput = $("#chooseFileInput");
 
-  function handleFilesPicked(input){
-    var files = Array.prototype.slice.call(input.files || []);
-    input.value = ""; // allow re-selecting the same photo later
+  takePhotoInput.addEventListener("change", function(){
+    var files = Array.prototype.slice.call(takePhotoInput.files || []);
+    takePhotoInput.value = ""; // allow re-selecting/retaking later
     if (!files.length) return;
+    var capturedAt = new Date();
     Promise.all(files.map(function(file){
-      return processImage(file).then(function(res){
-        state.pendingBatch.push({
-          id: uid(),
-          blob: res.blob,
-          previewUrl: URL.createObjectURL(res.blob),
-          capturedAt: new Date(),
-          width: res.width,
-          height: res.height
-        });
+      return loadDownscaledCanvas(file).then(function(res){
+        return { id: uid(), canvas: res.canvas, width: res.width, height: res.height, capturedAt: capturedAt };
       }).catch(function(err){
         console.error(err);
         showToast("Skipped a photo that couldn't be read.");
+        return null;
       });
-    })).then(function(){
-      location.hash = "#/review";
-      render();
+    })).then(function(items){
+      items = items.filter(Boolean);
+      if (items.length) startCropQueue(items);
     });
-  }
-  takePhotoInput.addEventListener("change", function(){ handleFilesPicked(takePhotoInput); });
-  chooseFileInput.addEventListener("change", function(){ handleFilesPicked(chooseFileInput); });
+  });
 
   function openTakePhoto(){
     if (!CONFIGURED) { showToast("Set up Firebase first — see README.md"); return; }
     takePhotoInput.click();
   }
-  function openChooseFile(){
-    if (!CONFIGURED) { showToast("Set up Firebase first — see README.md"); return; }
-    chooseFileInput.click();
+
+  // ---------------------------------------------------------------------
+  // Crop screen
+  //
+  // Shown once per captured photo, before it joins the review batch. Four
+  // draggable corner handles (order: TL, TR, BR, BL) let the user mark the
+  // receipt's actual edges; "Use Photo" then perspective-warps just that
+  // quad into a straightened rectangle, entirely client-side (a mesh of
+  // small quads, each rendered as two textured triangles via Canvas2D's
+  // affine `transform()` - no WebGL, no external library, works the same
+  // on iOS Safari and Android Chrome).
+  // ---------------------------------------------------------------------
+  var cropOverlay = $("#cropOverlay");
+  var cropStage = $("#cropStage");
+  var cropSvg = $("#cropSvg");
+  var cropPoly = $("#cropPoly");
+  var cropSub = $("#cropSub");
+  var cropHandleEls = [$("#cropHandle0"), $("#cropHandle1"), $("#cropHandle2"), $("#cropHandle3")];
+
+  var DEFAULT_CROP_POINTS = [
+    { x: 0.06, y: 0.06 }, // top-left
+    { x: 0.94, y: 0.06 }, // top-right
+    { x: 0.94, y: 0.94 }, // bottom-right
+    { x: 0.06, y: 0.94 }  // bottom-left
+  ];
+
+  function clamp01(v){ return Math.max(0, Math.min(1, v)); }
+  function cloneCropDefaults(){ return DEFAULT_CROP_POINTS.map(function(p){ return { x: p.x, y: p.y }; }); }
+
+  function startCropQueue(items){
+    state.cropQueue = state.cropQueue.concat(items);
+    state.cropTotal = state.cropQueue.length;
+    showNextCropItem();
+  }
+
+  function showNextCropItem(){
+    if (!state.cropQueue.length){
+      cropOverlay.classList.remove("show");
+      state.cropCurrent = null;
+      state.cropTotal = 0;
+      if (state.pendingBatch.length) { location.hash = "#/review"; render(); }
+      return;
+    }
+    var item = state.cropQueue[0];
+    state.cropCurrent = item;
+    state.cropPoints = cloneCropDefaults();
+
+    var existing = cropStage.querySelector("canvas.crop-canvas");
+    if (existing) existing.remove();
+    item.canvas.className = "crop-canvas";
+    cropStage.insertBefore(item.canvas, cropStage.firstChild);
+
+    var idx = state.cropTotal - state.cropQueue.length + 1;
+    cropSub.textContent = state.cropTotal > 1 ? ("Photo " + idx + " of " + state.cropTotal) : "";
+
+    cropOverlay.classList.add("show");
+    // Wait a frame so the canvas has been laid out (its displayed size is what
+    // handle positions are computed from) before placing the handles.
+    requestAnimationFrame(function(){ requestAnimationFrame(layoutCropHandles); });
+  }
+
+  function layoutCropHandles(){
+    if (!state.cropCurrent) return;
+    var canvasEl = cropStage.querySelector("canvas.crop-canvas");
+    if (!canvasEl) return;
+    var stageRect = cropStage.getBoundingClientRect();
+    var rect = canvasEl.getBoundingClientRect();
+    var offsetX = rect.left - stageRect.left;
+    var offsetY = rect.top - stageRect.top;
+
+    var pts = state.cropPoints.map(function(p){
+      return { x: offsetX + p.x * rect.width, y: offsetY + p.y * rect.height };
+    });
+
+    cropHandleEls.forEach(function(h, i){
+      h.style.left = pts[i].x + "px";
+      h.style.top = pts[i].y + "px";
+    });
+
+    cropSvg.setAttribute("width", stageRect.width);
+    cropSvg.setAttribute("height", stageRect.height);
+    cropSvg.setAttribute("viewBox", "0 0 " + stageRect.width + " " + stageRect.height);
+    cropPoly.setAttribute("points", pts.map(function(p){ return p.x + "," + p.y; }).join(" "));
+  }
+
+  cropHandleEls.forEach(function(handle, index){
+    handle.addEventListener("pointerdown", function(ev){
+      ev.preventDefault();
+      handle.setPointerCapture(ev.pointerId);
+
+      function move(ev2){
+        var canvasEl = cropStage.querySelector("canvas.crop-canvas");
+        if (!canvasEl) return;
+        var rect = canvasEl.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        state.cropPoints[index] = {
+          x: clamp01((ev2.clientX - rect.left) / rect.width),
+          y: clamp01((ev2.clientY - rect.top) / rect.height)
+        };
+        layoutCropHandles();
+      }
+      function up(ev2){
+        try { handle.releasePointerCapture(ev2.pointerId); } catch (e) {}
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+      }
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    });
+  });
+
+  window.addEventListener("resize", function(){
+    if (cropOverlay.classList.contains("show")) layoutCropHandles();
+  });
+
+  $("#cropResetBtn").addEventListener("click", function(){
+    state.cropPoints = cloneCropDefaults();
+    layoutCropHandles();
+  });
+
+  $("#cropCancelBtn").addEventListener("click", function(){
+    if (!state.cropQueue.length) { cropOverlay.classList.remove("show"); return; }
+    state.cropQueue.shift();
+    showNextCropItem();
+  });
+
+  $("#cropConfirmBtn").addEventListener("click", function(){
+    var item = state.cropCurrent;
+    if (!item) return;
+    var srcPts = state.cropPoints.map(function(p){
+      return { x: p.x * item.width, y: p.y * item.height };
+    });
+    var result = warpQuadToCanvas(item.canvas, srcPts);
+    canvasToBlob(result.canvas, "image/jpeg", 0.85).then(function(blob){
+      state.pendingBatch.push({
+        id: item.id,
+        blob: blob,
+        previewUrl: URL.createObjectURL(blob),
+        capturedAt: item.capturedAt,
+        width: result.width,
+        height: result.height
+      });
+      state.cropQueue.shift();
+      showNextCropItem();
+    }).catch(function(err){
+      console.error(err);
+      showToast("Couldn't process that crop — try again.");
+    });
+  });
+
+  function distance(p, q){ var dx = p.x - q.x, dy = p.y - q.y; return Math.sqrt(dx * dx + dy * dy); }
+
+  // True projective ("square-to-quadrilateral") mapping: returns a function
+  // that takes a (u,v) in [0,1]x[0,1] - a position in the straightened output
+  // - and maps it to the corresponding point inside the source quad [TL, TR,
+  // BR, BL]. This is the standard closed-form homography used for document/
+  // barcode perspective correction (the same derivation ZXing's
+  // PerspectiveTransform.squareToQuadrilateral uses), so straight edges in
+  // the source (the receipt's sides) stay straight in the output - a plain
+  // bilinear blend of the 4 corners would bow lines near strong perspective.
+  function squareToQuadMapper(quad){
+    var x0 = quad[0].x, y0 = quad[0].y, x1 = quad[1].x, y1 = quad[1].y;
+    var x2 = quad[2].x, y2 = quad[2].y, x3 = quad[3].x, y3 = quad[3].y;
+    var dx3 = x0 - x1 + x2 - x3, dy3 = y0 - y1 + y2 - y3;
+    var a11, a21, a12, a22, g, h;
+    if (Math.abs(dx3) < 1e-9 && Math.abs(dy3) < 1e-9) {
+      // Already a parallelogram - plain affine map, no perspective term needed.
+      a11 = x1 - x0; a21 = x2 - x1;
+      a12 = y1 - y0; a22 = y2 - y1;
+      g = 0; h = 0;
+    } else {
+      var dx1 = x1 - x2, dx2 = x3 - x2, dy1 = y1 - y2, dy2 = y3 - y2;
+      var denom = dx1 * dy2 - dx2 * dy1;
+      g = (dx3 * dy2 - dx2 * dy3) / denom;
+      h = (dx1 * dy3 - dx3 * dy1) / denom;
+      a11 = x1 - x0 + g * x1; a21 = x3 - x0 + h * x3;
+      a12 = y1 - y0 + g * y1; a22 = y3 - y0 + h * y3;
+    }
+    return function(u, v){
+      var w = g * u + h * v + 1;
+      return { x: (a11 * u + a21 * v + x0) / w, y: (a12 * u + a22 * v + y0) / w };
+    };
+  }
+
+  // Draws the triangle of `img` at source points srcPts onto `ctx` at
+  // destination points dstPts, via the unique affine transform mapping one
+  // triangle onto the other (solved with Cramer's rule) plus a clip path.
+  function warpTriangle(ctx, img, srcPts, dstPts){
+    var x0 = srcPts[0].x, y0 = srcPts[0].y, x1 = srcPts[1].x, y1 = srcPts[1].y, x2 = srcPts[2].x, y2 = srcPts[2].y;
+    var X0 = dstPts[0].x, Y0 = dstPts[0].y, X1 = dstPts[1].x, Y1 = dstPts[1].y, X2 = dstPts[2].x, Y2 = dstPts[2].y;
+
+    var denom = x0 * (y1 - y2) + x1 * (y2 - y0) + x2 * (y0 - y1);
+    if (Math.abs(denom) < 1e-6) return;
+
+    var a = (X0 * (y1 - y2) + X1 * (y2 - y0) + X2 * (y0 - y1)) / denom;
+    var b = (Y0 * (y1 - y2) + Y1 * (y2 - y0) + Y2 * (y0 - y1)) / denom;
+    var c = (X0 * (x2 - x1) + X1 * (x0 - x2) + X2 * (x1 - x0)) / denom;
+    var d = (Y0 * (x2 - x1) + Y1 * (x0 - x2) + Y2 * (x1 - x0)) / denom;
+    var e = (X0 * (x1 * y2 - x2 * y1) + X1 * (x2 * y0 - x0 * y2) + X2 * (x0 * y1 - x1 * y0)) / denom;
+    var f = (Y0 * (x1 * y2 - x2 * y1) + Y1 * (x2 * y0 - x0 * y2) + Y2 * (x0 * y1 - x1 * y0)) / denom;
+
+    var sMinX = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
+    var sMinY = Math.max(0, Math.floor(Math.min(y0, y1, y2)));
+    var sMaxX = Math.min(img.width, Math.ceil(Math.max(x0, x1, x2)));
+    var sMaxY = Math.min(img.height, Math.ceil(Math.max(y0, y1, y2)));
+    var sw = sMaxX - sMinX, sh = sMaxY - sMinY;
+    if (sw <= 0 || sh <= 0) return;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(X0, Y0); ctx.lineTo(X1, Y1); ctx.lineTo(X2, Y2); ctx.closePath();
+    ctx.clip();
+    ctx.transform(a, b, c, d, e, f);
+    ctx.drawImage(img, sMinX, sMinY, sw, sh, sMinX, sMinY, sw, sh);
+    ctx.restore();
+  }
+
+  // srcPts: [TL, TR, BR, BL] in sourceCanvas pixel coordinates.
+  function warpQuadToCanvas(sourceCanvas, srcPts){
+    var TL = srcPts[0], TR = srcPts[1], BR = srcPts[2], BL = srcPts[3];
+
+    var outW = Math.round((distance(TL, TR) + distance(BL, BR)) / 2);
+    var outH = Math.round((distance(TL, BL) + distance(TR, BR)) / 2);
+    outW = Math.max(40, outW);
+    outH = Math.max(40, outH);
+    var maxDim = 1800;
+    var scale = Math.min(1, maxDim / Math.max(outW, outH));
+    outW = Math.round(outW * scale);
+    outH = Math.round(outH * scale);
+
+    var out = document.createElement("canvas");
+    out.width = outW; out.height = outH;
+    var ctx = out.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, outW, outH);
+
+    var cols = Math.max(6, Math.min(24, Math.round(outW / 70)));
+    var rows = Math.max(6, Math.min(30, Math.round(outH / 70)));
+    var mapFn = squareToQuadMapper([TL, TR, BR, BL]);
+
+    for (var j = 0; j < rows; j++){
+      var v0 = j / rows, v1 = (j + 1) / rows;
+      for (var i = 0; i < cols; i++){
+        var u0 = i / cols, u1 = (i + 1) / cols;
+
+        var sTL = mapFn(u0, v0);
+        var sTR = mapFn(u1, v0);
+        var sBR = mapFn(u1, v1);
+        var sBL = mapFn(u0, v1);
+
+        var dTL = { x: u0 * outW, y: v0 * outH };
+        var dTR = { x: u1 * outW, y: v0 * outH };
+        var dBR = { x: u1 * outW, y: v1 * outH };
+        var dBL = { x: u0 * outW, y: v1 * outH };
+
+        warpTriangle(ctx, sourceCanvas, [sTL, sTR, sBR], [dTL, dTR, dBR]);
+        warpTriangle(ctx, sourceCanvas, [sTL, sBR, sBL], [dTL, dBR, dBL]);
+      }
+    }
+
+    return { canvas: out, width: outW, height: outH };
   }
 
   function removeFromBatch(id){
@@ -705,10 +1052,7 @@
     main.appendChild(listWrap);
 
     root.appendChild(el("div", { class: "fab-wrap" }, [
-      el("div", { class: "scan-actions" }, [
-        el("button", { class: "btn btn-primary", onclick: openTakePhoto }, ["📷 Take Photo"]),
-        el("button", { class: "btn btn-primary", onclick: openChooseFile }, ["🖼️ Choose File"])
-      ])
+      el("button", { class: "btn btn-primary btn-block", onclick: openTakePhoto }, ["📷  Scan Receipt"])
     ]));
 
     if (!CONFIGURED) return;
@@ -718,7 +1062,7 @@
       if (!months.length) {
         listWrap.appendChild(el("div", { class: "empty" }, [
           el("span", { class: "big" }, ["🧾"]),
-          "No receipts yet. Tap “Take Photo” or “Choose File” to add your first one."
+          "No receipts yet. Tap “Scan Receipt” to add your first one."
         ]));
         return;
       }
@@ -767,20 +1111,15 @@
     main.appendChild(grid);
 
     root.appendChild(el("div", { class: "bottom-bar" }, [
-      el("div", { class: "row" }, [
-        el("button", { class: "btn btn-outline btn-sm", disabled: state.saving, onclick: openTakePhoto }, ["📷 Take Photo"]),
-        el("button", { class: "btn btn-outline btn-sm", disabled: state.saving, onclick: openChooseFile }, ["🖼️ Choose File"])
-      ]),
-      el("div", { class: "row" }, [
-        el("button", { class: "btn btn-outline", disabled: state.saving, onclick: discardBatch }, ["Discard"]),
-        el("button", {
-          class: "btn btn-primary",
-          disabled: state.saving,
-          onclick: saveBatch
-        }, state.saving
-            ? [el("span", { class: "spinner" }), " Saving…"]
-            : ["Save (" + state.pendingBatch.length + ")"])
-      ])
+      el("button", { class: "btn btn-outline", disabled: state.saving, onclick: discardBatch }, ["Discard"]),
+      el("button", { class: "btn btn-outline", disabled: state.saving, onclick: openTakePhoto }, ["+ Add Photo"]),
+      el("button", {
+        class: "btn btn-primary",
+        disabled: state.saving,
+        onclick: saveBatch
+      }, state.saving
+          ? [el("span", { class: "spinner" }), " Saving…"]
+          : ["Save (" + state.pendingBatch.length + ")"])
     ]));
   }
 
