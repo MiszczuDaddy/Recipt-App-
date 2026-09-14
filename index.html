@@ -1204,8 +1204,26 @@
   // ---------------------------------------------------------------------
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", function(){
-      navigator.serviceWorker.register("sw.js").catch(function(err){
+      navigator.serviceWorker.register("sw.js").then(function(reg){
+        // Proactively check for a newer service worker instead of waiting on
+        // the browser's own update-check interval (which can be as long as
+        // 24h) - this is what makes a new deploy show up the next time the
+        // app is opened, rather than staying on a stale cached version.
+        reg.update().catch(function(){});
+      }).catch(function(err){
         console.warn("Service worker registration failed", err);
+      });
+
+      // If a new service worker takes over an already-open page (this is an
+      // update, not the very first install - hadController tells them apart),
+      // reload once so the page picks up the new code instead of continuing
+      // to run the old JS against a freshly-swapped cache.
+      var hadController = !!navigator.serviceWorker.controller;
+      var reloadingForUpdate = false;
+      navigator.serviceWorker.addEventListener("controllerchange", function(){
+        if (!hadController || reloadingForUpdate) return;
+        reloadingForUpdate = true;
+        location.reload();
       });
     });
   }
