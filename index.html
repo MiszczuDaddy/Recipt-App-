@@ -305,7 +305,7 @@
 
   .hint{color:var(--muted); font-size:13px; margin:0 0 16px; line-height:1.5;}
 
-  #cropOverlay{
+  #cropOverlay, #cameraOverlay{
     position:fixed;
     inset:0;
     background:#0b0f0d;
@@ -313,8 +313,8 @@
     flex-direction:column;
     z-index:70;
   }
-  #cropOverlay.show{display:flex;}
-  .crop-header{
+  #cropOverlay.show, #cameraOverlay.show{display:flex;}
+  .overlay-header{
     display:flex;
     align-items:center;
     gap:10px;
@@ -322,8 +322,8 @@
     color:#fff;
     flex-shrink:0;
   }
-  .crop-header .title{flex:1; font-weight:700; font-size:16px;}
-  .crop-header .title .sub{display:block; font-size:12px; font-weight:400; opacity:.75; margin-top:1px;}
+  .overlay-header .title{flex:1; font-weight:700; font-size:16px;}
+  .overlay-header .title .sub{display:block; font-size:12px; font-weight:400; opacity:.75; margin-top:1px;}
   .crop-stage{
     position:relative;
     flex:1;
@@ -366,14 +366,14 @@
     cursor:grab;
     z-index:2;
   }
-  .crop-actions{
+  .overlay-actions{
     display:flex;
     gap:10px;
     padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px)) 16px;
     background:#12211c;
     flex-shrink:0;
   }
-  .crop-actions .btn{flex:1;}
+  .overlay-actions .btn{flex:1;}
   .crop-hint{
     color:rgba(255,255,255,.7);
     font-size:12.5px;
@@ -381,6 +381,36 @@
     padding:0 16px 10px;
     flex-shrink:0;
   }
+
+  .camera-stage{
+    position:relative;
+    flex:1;
+    min-height:0;
+    overflow:hidden;
+    background:#000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  #cameraVideo{
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    display:block;
+    background:#000;
+  }
+  .camera-loading{
+    position:absolute;
+    inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    color:rgba(255,255,255,.85);
+    font-size:14px;
+    background:rgba(0,0,0,.35);
+  }
+  .camera-loading[hidden]{display:none;}
 </style>
 </head>
 <body>
@@ -389,18 +419,40 @@
 <div id="toast"></div>
 <div id="lightbox"><button class="close" id="lightboxClose">&#10005;</button><img id="lightboxImg" alt="Receipt full size"></div>
 
-<!-- capture="environment" forces the rear camera open directly on every phone we've
-     tested, including Samsung (where a plain <input> with no capture attribute was
-     found to sometimes open the FRONT camera instead of a chooser). Since we can't
-     reach any OS-level document scanner reliably this way, cropping/deskewing the
-     receipt is done ourselves after the photo is taken - see the crop screen below. -->
+<!-- Fallback only: used when getUserMedia isn't available, or fails, in the
+     browser. The primary camera path is the custom live-preview view below
+     (#cameraOverlay), which lets us explicitly request the rear lens via
+     getUserMedia's facingMode constraint - the <input capture="environment">
+     attribute below is just a *hint* the browser is free to ignore, and on
+     some Samsung/Android browser combinations it does, opening the front
+     camera instead. getUserMedia's constraint is an actual instruction the
+     browser has to honor (or fail and let us fall back further). -->
 <input type="file" id="takePhotoInput" accept="image/*" capture="environment" multiple style="display:none">
+
+<!-- Custom camera view: live getUserMedia preview with an explicit rear-camera
+     request, so opening the rear camera doesn't depend on a browser honoring
+     the <input capture> hint. Shown first; falls back to the file input above
+     only if getUserMedia is unavailable or the user denies/has no camera. -->
+<div id="cameraOverlay">
+  <div class="overlay-header">
+    <button class="icon-btn" id="cameraCancelBtn" aria-label="Cancel">&#10005;</button>
+    <div class="title">Scan Receipt<span class="sub" id="cameraSub"></span></div>
+    <button class="icon-btn" id="cameraSwitchBtn" aria-label="Switch camera" title="Switch camera">&#8635;</button>
+  </div>
+  <div class="camera-stage" id="cameraStage">
+    <video id="cameraVideo" autoplay playsinline muted></video>
+    <div class="camera-loading" id="cameraLoading"><span class="spinner"></span> Starting camera…</div>
+  </div>
+  <div class="overlay-actions">
+    <button class="btn btn-primary btn-block" id="cameraCaptureBtn">&#9679;&nbsp; Capture</button>
+  </div>
+</div>
 
 <!-- Crop screen: shown after each photo is taken, before it's added to the review
      batch. Lets the user drag the 4 corner handles onto the receipt's edges; the
      quad is then perspective-warped into a straightened rectangle client-side. -->
 <div id="cropOverlay">
-  <div class="crop-header">
+  <div class="overlay-header">
     <button class="icon-btn" id="cropCancelBtn" aria-label="Discard this photo">&#10005;</button>
     <div class="title">Crop Receipt<span class="sub" id="cropSub"></span></div>
   </div>
@@ -412,7 +464,7 @@
     <div class="crop-handle" id="cropHandle3"></div>
   </div>
   <div class="crop-hint">Drag the corners onto the edges of the receipt</div>
-  <div class="crop-actions">
+  <div class="overlay-actions">
     <button class="btn btn-outline" id="cropResetBtn">Reset</button>
     <button class="btn btn-primary" id="cropConfirmBtn">Use Photo</button>
   </div>
@@ -559,14 +611,12 @@
   // ---------------------------------------------------------------------
   // Photo input handling
   //
-  // Single <input capture="environment">: forces the rear camera open
-  // directly on every phone we've tested, with no regressions. A plain
-  // <input> with no capture attribute was tried instead (to reach Samsung's
-  // built-in "Scan documents" option through the OS chooser) but on Samsung
-  // it sometimes opened the FRONT camera instead - worse than what we had.
-  // Since no OS-level document scanner can be reached reliably this way,
-  // cropping/deskewing the receipt is handled ourselves, in-app, right
-  // after the photo is taken (see the crop-screen section below).
+  // Fallback path only: an <input capture="environment"> is just a *hint*
+  // to the browser about which camera to open, and some Samsung/Android
+  // browser combinations were found to ignore it (opening the front camera
+  // instead, or a chooser). Used only when getUserMedia is unavailable or
+  // fails - see the camera-view section below for the primary path, which
+  // requests the rear lens as an actual getUserMedia constraint instead.
   // ---------------------------------------------------------------------
   var takePhotoInput = $("#takePhotoInput");
 
@@ -589,10 +639,124 @@
     });
   });
 
-  function openTakePhoto(){
-    if (!CONFIGURED) { showToast("Set up Firebase first — see README.md"); return; }
+  function useFileInputFallback(){
     takePhotoInput.click();
   }
+
+  // ---------------------------------------------------------------------
+  // Camera view
+  //
+  // A live getUserMedia preview instead of handing off to the OS camera
+  // app. The reason: <input capture="environment"> is only ever a hint the
+  // browser may ignore (and on some Samsung/Android combos, does - opening
+  // the front camera instead of the rear one, which is what sent us down
+  // this path). getUserMedia's facingMode constraint is a real instruction:
+  // we ask for the rear ("environment") camera specifically, try
+  // progressively looser fallbacks if that exact request can't be
+  // satisfied, and only fall back to the OS camera app (the file input
+  // above) if no camera can be opened this way at all.
+  // ---------------------------------------------------------------------
+  var cameraOverlay = $("#cameraOverlay");
+  var cameraVideo = $("#cameraVideo");
+  var cameraLoadingEl = $("#cameraLoading");
+  var cameraStream = null;
+  var cameraFacingMode = "environment";
+
+  function stopCameraStream(){
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(function(t){ t.stop(); });
+      cameraStream = null;
+    }
+    cameraVideo.srcObject = null;
+  }
+
+  function closeCameraOverlay(){
+    stopCameraStream();
+    cameraOverlay.classList.remove("show");
+  }
+
+  // Never leave the camera running in the background - release it the
+  // moment the tab is hidden (another app, screen lock, switching tabs).
+  document.addEventListener("visibilitychange", function(){
+    if (document.hidden && cameraOverlay.classList.contains("show")) closeCameraOverlay();
+  });
+  // Defensive: if something navigates the SPA away while the camera view is
+  // open (e.g. the phone's back button firing a hash change), release it.
+  window.addEventListener("hashchange", function(){
+    if (cameraOverlay.classList.contains("show")) closeCameraOverlay();
+  });
+
+  function startCameraStream(facingMode){
+    var attempts = [
+      { video: { facingMode: { exact: facingMode } }, audio: false },
+      { video: { facingMode: { ideal: facingMode } }, audio: false },
+      { video: true, audio: false }
+    ];
+    function tryAttempt(i){
+      if (i >= attempts.length) return Promise.reject(new Error("No camera could be opened"));
+      return navigator.mediaDevices.getUserMedia(attempts[i]).catch(function(err){
+        console.warn("getUserMedia attempt " + i + " failed", err);
+        return tryAttempt(i + 1);
+      });
+    }
+    return tryAttempt(0);
+  }
+
+  function openTakePhoto(){
+    if (!CONFIGURED) { showToast("Set up Firebase first — see README.md"); return; }
+
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+      useFileInputFallback(); // old/unusual browser - no getUserMedia at all
+      return;
+    }
+
+    cameraFacingMode = "environment";
+    cameraLoadingEl.hidden = false;
+    cameraOverlay.classList.add("show");
+
+    startCameraStream(cameraFacingMode).then(function(stream){
+      cameraStream = stream;
+      cameraVideo.srcObject = stream;
+      cameraLoadingEl.hidden = true;
+    }).catch(function(err){
+      console.error("Camera error", err);
+      cameraOverlay.classList.remove("show");
+      showToast("Couldn't access the camera directly — opening your camera app instead.");
+      useFileInputFallback();
+    });
+  }
+
+  $("#cameraCancelBtn").addEventListener("click", closeCameraOverlay);
+
+  $("#cameraSwitchBtn").addEventListener("click", function(){
+    cameraFacingMode = cameraFacingMode === "environment" ? "user" : "environment";
+    cameraLoadingEl.hidden = false;
+    startCameraStream(cameraFacingMode).then(function(stream){
+      stopCameraStream();
+      cameraStream = stream;
+      cameraVideo.srcObject = stream;
+      cameraLoadingEl.hidden = true;
+    }).catch(function(err){
+      console.error("Camera switch error", err);
+      cameraLoadingEl.hidden = true;
+      showToast("Couldn't switch camera.");
+    });
+  });
+
+  $("#cameraCaptureBtn").addEventListener("click", function(){
+    var vw = cameraVideo.videoWidth, vh = cameraVideo.videoHeight;
+    if (!vw || !vh) { showToast("Camera isn't ready yet — try again in a moment."); return; }
+
+    var maxDim = 1800;
+    var scale = Math.min(1, maxDim / Math.max(vw, vh));
+    var w = Math.max(1, Math.round(vw * scale)), h = Math.max(1, Math.round(vh * scale));
+    var canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    canvas.getContext("2d").drawImage(cameraVideo, 0, 0, w, h);
+
+    closeCameraOverlay();
+    startCropQueue([{ id: uid(), canvas: canvas, width: w, height: h, capturedAt: new Date() }]);
+  });
 
   // ---------------------------------------------------------------------
   // Crop screen

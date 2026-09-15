@@ -130,14 +130,22 @@ reach Firebase).
 
 ## How it works
 
-- **Scan**: one button, `<input type="file" capture="environment">`, forces
-  the rear camera open directly. This is the only input behavior that's
-  proven reliable across phones — a plain `<input>` with no `capture`
-  attribute (tried in an earlier version, to try to reach Samsung's
-  built-in "Scan documents" option through the OS chooser) was found on
-  Samsung to sometimes open the *front* camera instead. Since no OS-level
-  document scanner can be reached reliably this way, cropping/deskewing the
-  receipt is handled in-app instead — see **Crop** below.
+- **Scan**: one button opens a custom, full-screen camera view — a live
+  `getUserMedia` preview with an explicit request for the rear
+  (`facingMode: "environment"`) camera, plus a manual switch-camera button
+  as a backup. Two earlier approaches were tried and both turned out
+  unreliable on real phones: an `<input capture="environment">` is only
+  ever a *hint* the browser may ignore, which on some Samsung/Android
+  combinations meant tapping "scan" opened the *front* camera instead; a
+  plain `<input>` with no `capture` attribute (tried to reach Samsung's
+  built-in "Scan documents" option via the OS chooser) had the same
+  problem. `getUserMedia`'s `facingMode` is an actual constraint the
+  browser has to honor or fail, not a hint, so it's what the app relies on
+  now. If `getUserMedia` isn't available at all (or every camera request
+  fails), it falls back to `<input capture="environment">` so the app still
+  works. Since no OS-level document scanner can be reached reliably from a
+  web page either way, cropping/deskewing the receipt is handled in-app
+  instead — see **Crop** below.
 - **Crop**: after each photo, a full-screen crop tool shows it with 4
   draggable corner handles (order: top-left, top-right, bottom-right,
   bottom-left) — a separate UI layer (SVG outline + handle elements) drawn
@@ -178,5 +186,6 @@ No build step — just serve the folder statically, e.g.:
 npx serve .
 ```
 
-Camera access via `capture="environment"` generally requires HTTPS or
-`localhost`, so use `localhost` while testing locally.
+`getUserMedia` (camera access) requires a secure context - HTTPS or
+`localhost` - so use `localhost` while testing locally, otherwise the app
+falls straight back to the `<input capture>` path.
